@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from supabase import create_client, Client
 from utils.pdf_processor import process_pdf
@@ -22,6 +22,10 @@ supabase: Client = create_client(
 
 # Initialize LLM client
 llm_client = LLMClient()
+
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 @app.route('/api/process-pdf', methods=['POST'])
 def process_pdf_endpoint():
@@ -135,5 +139,6 @@ def generate_hash():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# For local development
 if __name__ == '__main__':
     app.run(debug=True) 
