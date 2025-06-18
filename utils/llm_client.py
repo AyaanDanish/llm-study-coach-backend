@@ -2,6 +2,7 @@ import os
 import requests
 from typing import Optional
 
+
 class LLMClient:
     MODEL = "mistralai/mistral-7b-instruct:free"
 
@@ -9,10 +10,10 @@ class LLMClient:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable not set")
-        
+
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -33,35 +34,40 @@ Avoid copying the text verbatim. Here is the document content:
     def generate_study_notes(self, chunk: str) -> Optional[str]:
         """
         Generate study notes for a text chunk using the LLM.
-        
+
         Args:
             chunk: Text chunk to generate notes for
-            
+
         Returns:
             Generated notes as string, or None if API call fails
         """
         prompt = self.get_prompt_template().format(chunk=chunk)
 
-        data = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}]
-        }
+        data = {"model": self.MODEL, "messages": [{"role": "user", "content": prompt}]}
 
         try:
             response = requests.post(self.api_url, headers=self.headers, json=data)
             response.raise_for_status()
-            return response.json()['choices'][0]['message']['content']
+            response_data = response.json()
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                return response_data["choices"][0]["message"]["content"]
+            else:
+                print(f"Invalid response format: {response_data}")
+                return None
         except requests.exceptions.RequestException as e:
             print(f"Error calling OpenRouter API: {e}")
+            return None
+        except (KeyError, IndexError) as e:
+            print(f"Error parsing API response: {e}")
             return None
 
     def generate_notes_for_chunks(self, chunks: list[str]) -> list[str]:
         """
         Generate notes for multiple chunks.
-        
+
         Args:
             chunks: List of text chunks
-            
+
         Returns:
             List of generated notes for each chunk
         """
@@ -72,4 +78,4 @@ Avoid copying the text verbatim. Here is the document content:
                 notes.append(result)
             else:
                 notes.append("❌ Error generating notes for this chunk")
-        return notes 
+        return notes
