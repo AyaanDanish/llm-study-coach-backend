@@ -158,6 +158,184 @@ def generate_hash():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/generate-flashcards", methods=["POST"])
+def generate_flashcards():
+    """Generate AI-powered flashcards from study material content."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        content = data.get("content")
+        category = data.get("category", "General")
+        user_id = request.headers.get("X-User-ID")
+
+        if not content:
+            return jsonify({"error": "Content is required"}), 400
+
+        if not user_id:
+            return jsonify({"error": "User ID not provided"}), 401
+
+        print(f"🃏 Generating flashcards for user {user_id}")
+        print(f"   Category: {category}")
+        print(f"   Content length: {len(content)} characters")
+
+        # Generate flashcards using LLM
+        flashcards = llm_client.generate_flashcards(content, category)
+
+        if not flashcards:
+            return jsonify({"error": "Failed to generate flashcards"}), 500
+
+        # Save flashcards to database
+        saved_flashcards = []
+        for card in flashcards:
+            try:
+                # Insert flashcard into database
+                response = (
+                    supabase.table("flashcards")
+                    .insert(
+                        {
+                            "front": card["front"],
+                            "back": card["back"],
+                            "category": card.get("category", category),
+                            "difficulty": card.get("difficulty", "medium"),
+                            "user_id": user_id,
+                        }
+                    )
+                    .execute()
+                )
+
+                if response.data:
+                    saved_flashcards.append(response.data[0])
+
+            except Exception as e:
+                print(f"⚠️ Error saving flashcard: {e}")
+                continue
+
+        if saved_flashcards:
+            print(f"✅ Successfully saved {len(saved_flashcards)} flashcards")
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": f"Generated and saved {len(saved_flashcards)} flashcards",
+                    "flashcards": saved_flashcards,
+                    "total_generated": len(flashcards),
+                    "total_saved": len(saved_flashcards),
+                }
+            )
+        else:
+            return jsonify({"error": "Failed to save flashcards to database"}), 500
+
+    except Exception as e:
+        print(f"❌ Error in generate_flashcards endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/generate-flashcards-from-material/<content_hash>", methods=["POST"])
+def generate_flashcards_from_material(content_hash):
+    """Generate flashcards from existing study material."""
+    try:
+        user_id = request.headers.get("X-User-ID")
+        if not user_id:
+            return jsonify({"error": "User ID not provided"}), 401
+
+        data = request.get_json() or {}
+        category = data.get("category", "Study Material")
+
+        # Fetch the study material content and associated material info
+        response = (
+            supabase.table("study_notes")
+            .select("*")
+            .eq("content_hash", content_hash)
+            .execute()
+        )
+
+        if not response.data:
+            return jsonify({"error": "Study material not found"}), 404
+
+        study_material = response.data[0]
+        content = study_material["content"]
+
+        # Try to get the subject from the study_materials table
+        material_info = None
+        try:
+            material_response = (
+                supabase.table("study_materials")
+                .select("subject, title")
+                .eq("content_hash", content_hash)
+                .single()
+                .execute()
+            )
+            if material_response.data:
+                material_info = material_response.data
+                # Use the subject from study_materials as the category
+                category = material_info["subject"] or category
+        except Exception as e:
+            print(f"⚠️ Could not fetch material info: {e}")
+            # Continue with default category
+
+        print(f"🃏 Generating flashcards from study material")
+        print(f"   Content hash: {content_hash}")
+        print(f"   Category: {category}")
+        print(f"   Material: {material_info['title'] if material_info else 'Unknown'}")
+        print(f"   Content length: {len(content)} characters")
+
+        # Generate flashcards using LLM
+        flashcards = llm_client.generate_flashcards(content, category)
+
+        if not flashcards:
+            return jsonify({"error": "Failed to generate flashcards"}), 500
+
+        # Save flashcards to database
+        saved_flashcards = []
+        for card in flashcards:
+            try:
+                # Insert flashcard into database
+                response = (
+                    supabase.table("flashcards")
+                    .insert(
+                        {
+                            "user_id": user_id,
+                            "front": card["front"],
+                            "back": card["back"],
+                            "category": card.get("category", category),
+                            "difficulty": card.get("difficulty", "medium"),
+                        }
+                    )
+                    .execute()
+                )
+
+                if response.data:
+                    saved_flashcards.append(response.data[0])
+
+            except Exception as e:
+                print(f"⚠️ Error saving flashcard: {e}")
+                continue
+
+        if saved_flashcards:
+            print(f"✅ Successfully saved {len(saved_flashcards)} flashcards")
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": f"Generated and saved {len(saved_flashcards)} flashcards from study material",
+                    "flashcards": saved_flashcards,
+                    "total_generated": len(flashcards),
+                    "total_saved": len(saved_flashcards),
+                    "source_material": {
+                        "content_hash": content_hash,
+                        "model_used": study_material["model_used"],
+                        "generated_at": study_material["generated_at"],
+                    },
+                }
+            )
+        else:
+            return jsonify({"error": "Failed to save flashcards to database"}), 500
+
+    except Exception as e:
+        print(f"❌ Error in generate_flashcards_from_material endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # For local development
 if __name__ == "__main__":
     app.run(debug=True)
