@@ -578,3 +578,235 @@ Content to create flashcards from:
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
             return None
+
+    def get_quiz_prompt_template(self) -> str:
+        """Prompt template specifically designed for generating quiz questions with structured outputs."""
+        return """You are an expert study assistant specialized in creating effective multiple-choice quiz questions for learning assessment. Generate exactly 5 high-quality quiz questions based on the provided study material.
+
+## Guidelines for Effective Quiz Questions:
+1. **Test understanding** - Focus on comprehension, application, and analysis
+2. **Clear and unambiguous** - Questions should have one clearly correct answer
+3. **Realistic distractors** - Wrong answers should be plausible but clearly incorrect
+4. **Variety in difficulty** - Mix of easy, medium, and hard questions
+5. **Cover key concepts** - Focus on the most important material
+6. **Answerable from content** - All questions must be answerable from the provided material
+
+## Question Types to Include:
+- **Definitions**: What is...?
+- **Applications**: How would you use...?
+- **Analysis**: Why does...?
+- **Comparisons**: What's the difference between...?
+- **Examples**: Which of the following is an example of...?
+
+## Instructions:
+- Generate exactly 5 multiple-choice questions
+- Each question must have exactly 4 options (A, B, C, D)
+- Only one option should be correct
+- Include brief explanations for correct answers
+- Ensure questions test different aspects of the material
+- Questions should be clear and professional
+
+Subject: {subject}
+Material Title: {title}
+
+Study Material Content:
+\"\"\"{content}\"\"\""""
+
+    def generate_quiz(self, content: str, subject: str, title: str) -> Optional[list]:
+        """
+        Generate quiz questions from study content using GPT-4.1 Nano.
+
+        Args:
+            content: Study material content to create quiz questions from
+            subject: Subject/category of the material
+            title: Title of the study material
+
+        Returns:
+            List of quiz question dictionaries, or None if API call fails
+        """
+        # Validate content size
+        estimated_tokens = self.estimate_tokens(content)
+        prompt_tokens = self.estimate_tokens(self.get_quiz_prompt_template())
+        total_input_tokens = estimated_tokens + prompt_tokens
+
+        print(f"🧠 Generating quiz questions with GPT-4.1 Nano:")
+        print(f"   Input tokens: {total_input_tokens:,} / {self.MAX_INPUT_TOKENS:,}")
+
+        if total_input_tokens > self.MAX_INPUT_TOKENS:
+            print(
+                f"⚠️ Content too large ({total_input_tokens:,} tokens). Consider using summary."
+            )
+            return None
+
+        # Calculate estimated cost
+        estimated_input_cost = (total_input_tokens / 1_000_000) * self.INPUT_COST_PER_1M
+        estimated_output_cost = (
+            2000 / 1_000_000
+        ) * self.OUTPUT_COST_PER_1M  # Assume ~2k output for quiz
+        total_estimated_cost = estimated_input_cost + estimated_output_cost
+        print(f"💰 Estimated cost: ${total_estimated_cost:.4f}")
+
+        prompt = self.get_quiz_prompt_template().format(
+            content=content, subject=subject, title=title
+        )
+
+        # Enhanced data payload for quiz generation with structured outputs
+        data = {
+            "model": self.MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2000,  # Sufficient for 5 questions with explanations
+            "temperature": 0.1,  # Low temperature for consistent formatting
+            "top_p": 0.8,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "quiz",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "question": {
+                                            "type": "string",
+                                            "description": "The question text",
+                                        },
+                                        "options": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "minItems": 4,
+                                            "maxItems": 4,
+                                            "description": "Exactly 4 answer options",
+                                        },
+                                        "correct_answer": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 3,
+                                            "description": "Index of correct answer (0-3)",
+                                        },
+                                        "explanation": {
+                                            "type": "string",
+                                            "description": "Brief explanation of correct answer",
+                                        },
+                                        "difficulty": {
+                                            "type": "string",
+                                            "enum": ["easy", "medium", "hard"],
+                                            "description": "Question difficulty level",
+                                        },
+                                    },
+                                    "required": [
+                                        "question",
+                                        "options",
+                                        "correct_answer",
+                                        "explanation",
+                                        "difficulty",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                                "minItems": 5,
+                                "maxItems": 5,
+                                "description": "Exactly 5 quiz questions",
+                            }
+                        },
+                        "required": ["questions"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+
+        try:
+            print(f"🔄 Calling OpenRouter API...")
+            response = requests.post(
+                self.api_url, headers=self.headers, json=data, timeout=60
+            )
+
+            if response.status_code == 429:
+                print(f"⚠️ Rate limit exceeded. Please wait and try again.")
+                return None
+            elif response.status_code == 400:
+                print(f"❌ Bad request - possibly content too large or invalid format.")
+                print(f"Response: {response.text}")
+                return None
+            elif response.status_code == 401:
+                print(f"❌ Unauthorized - check your OPENROUTER_API_KEY.")
+                print(f"Response: {response.text}")
+                return None
+
+            response.raise_for_status()
+            response_data = response.json()
+
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                content_result = response_data["choices"][0]["message"]["content"]
+                if content_result and content_result.strip():
+                    try:
+                        # Parse the structured JSON response
+                        import json
+
+                        print(f"🔍 Parsing structured output...")
+
+                        response_json = json.loads(content_result)
+
+                        # Extract questions from structured response
+                        if "questions" in response_json and isinstance(
+                            response_json["questions"], list
+                        ):
+                            questions = response_json["questions"]
+                        else:
+                            print(
+                                f"❌ Invalid response structure: missing 'questions' array"
+                            )
+                            return None
+
+                        # Validate each question (should be valid due to structured output, but double-check)
+                        valid_questions = []
+                        for i, question in enumerate(questions):
+                            if (
+                                isinstance(question, dict)
+                                and "question" in question
+                                and "options" in question
+                                and "correct_answer" in question
+                                and "explanation" in question
+                                and isinstance(question["options"], list)
+                                and len(question["options"]) == 4
+                                and isinstance(question["correct_answer"], int)
+                                and 0 <= question["correct_answer"] <= 3
+                            ):
+                                # Add unique ID for each question
+                                question["id"] = f"q_{i+1}"
+                                valid_questions.append(question)
+                            else:
+                                print(f"❌ Invalid question format at index {i}")
+
+                        if len(valid_questions) == 5:
+                            print(f"✅ Generated {len(valid_questions)} quiz questions")
+                            return valid_questions
+                        else:
+                            print(
+                                f"❌ Expected 5 questions, got {len(valid_questions)} valid questions"
+                            )
+                            return None
+
+                    except json.JSONDecodeError as e:
+                        print(f"❌ Error parsing JSON response: {e}")
+                        print(f"Raw response: {content_result}")
+                        return None
+                else:
+                    print(f"❌ Empty response from API")
+                    return None
+            else:
+                print(f"❌ Invalid response format: {response_data}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Network error calling OpenRouter API: {e}")
+            if hasattr(e, "response") and e.response is not None:
+                print(f"Status code: {e.response.status_code}")
+                print(f"Response body: {e.response.text}")
+            return None
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            return None
