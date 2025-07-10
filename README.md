@@ -1,6 +1,6 @@
 # LLM Study Coach Backend
 
-A Flask backend service that processes PDF study materials and generates AI-powered study notes using OpenRouter's LLM API.
+A Flask backend service that processes PDF study materials and generates AI-powered study notes, flashcards, and quizzes using OpenRouter's LLM API.
 
 ## Features
 
