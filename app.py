@@ -482,6 +482,70 @@ def generate_quiz():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/ask-question", methods=["POST"])
+def ask_question():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    content_hash = data.get("content_hash")
+    question = data.get("question")
+    if not content_hash or not question:
+        return jsonify({"error": "content_hash and question are required"}), 400
+    # Fetch the study note
+    response = (
+        supabase.table("study_notes")
+        .select("id, content")
+        .eq("content_hash", content_hash)
+        .execute()
+    )
+    if not response.data or len(response.data) == 0:
+        return jsonify({"error": "Study note not found"}), 404
+    note = response.data[0]
+    notes_content = note["content"]
+    note_id = note["id"]
+    # Call LLM to answer the question
+    answer = llm_client.answer_question(notes_content, question)
+    if answer is None:
+        return jsonify({"error": "Failed to generate answer from LLM"}), 500
+    # Save to qa_sessions table
+    try:
+        qa_insert = supabase.table("qa_sessions").insert({
+            "note_id": note_id,
+            "question": question,
+            "answer": answer,
+        }).execute()
+    except Exception as e:
+        print(f"⚠️ Failed to save Q&A session: {e}")
+        # Continue anyway
+    return jsonify({"status": "success", "answer": answer})
+
+
+@app.route("/api/qa-list", methods=["GET"])
+def qa_list():
+    content_hash = request.args.get("content_hash")
+    if not content_hash:
+        return jsonify({"error": "content_hash is required"}), 400
+    # Get the note id for this content_hash
+    note_response = (
+        supabase.table("study_notes")
+        .select("id")
+        .eq("content_hash", content_hash)
+        .execute()
+    )
+    if not note_response.data or len(note_response.data) == 0:
+        return jsonify({"qa": []})
+    note_id = note_response.data[0]["id"]
+    # Get all Q&A for this note
+    qa_response = (
+        supabase.table("qa_sessions")
+        .select("id, question, answer, created_at")
+        .eq("note_id", note_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return jsonify({"qa": qa_response.data or []})
+
+
 @app.route("/debug-material/<material_id>", methods=["GET"])
 def debug_material(material_id):
     """Debug endpoint to check if material exists"""

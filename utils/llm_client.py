@@ -1,6 +1,7 @@
 import os
 import requests
 from typing import Optional
+import re
 
 
 class LLMClient:
@@ -173,7 +174,7 @@ Document content:
             print(f"❌ Error parsing API response: {e}")
             return None
 
-    def generate_notes_for_chunks(self, chunks: list[str]) -> list[str]:
+    def generate_notes_for_chunks(self, chunks: "list[str]") -> "list[str]":
         """
         Generate notes for multiple chunks using GPT-4.1 Nano.
 
@@ -198,7 +199,7 @@ Document content:
                     f"✅ Successfully generated notes for chunk {i + 1}"
                 )  # Calculate actual cost (rough estimate)
                 chunk_tokens = self.estimate_tokens(chunk)
-                output_tokens = self.estimate_tokens(result)
+                output_tokens = self.estimate_tokens(result if result is not None else "")
                 chunk_cost = (chunk_tokens / 1_000_000) * self.INPUT_COST_PER_1M + (
                     output_tokens / 1_000_000
                 ) * self.OUTPUT_COST_PER_1M
@@ -395,17 +396,19 @@ Document content:
 Content to create flashcards from:
 \"\"\"{content}\"\"\""""
 
-    def generate_flashcards(self, content: str, category: str = None) -> Optional[list]:
+    def generate_flashcards(self, content: Optional[str], category: Optional[str] = None) -> Optional[list]:
         """
         Generate flashcards from study content using GPT-4.1 Nano.
 
         Args:
-            content: Study material content to create flashcards from
+            content: Study material content to create flashcards from (or None)
             category: Optional category name for the flashcards
 
         Returns:
             List of flashcard dictionaries, or None if API call fails
         """
+        if content is None:
+            return None
         # Validate content size
         estimated_tokens = self.estimate_tokens(content)
         prompt_tokens = self.estimate_tokens(self.get_flashcard_prompt_template())
@@ -801,6 +804,78 @@ Study Material Content:
                 print(f"❌ Invalid response format: {response_data}")
                 return None
 
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Network error calling OpenRouter API: {e}")
+            if hasattr(e, "response") and e.response is not None:
+                print(f"Status code: {e.response.status_code}")
+                print(f"Response body: {e.response.text}")
+            return None
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            return None
+
+    def get_qa_prompt_template(self) -> str:
+        """Prompt template for answering user questions based on study notes, with best-practice markdown formatting."""
+        return (
+            "You are an expert tutor. Given the following study notes, answer the user's question in detail.\n"
+            "\n**Instructions:**\n"
+            "- Use markdown formatting for clarity (headings, bold, italics, lists, code blocks if needed).\n"
+            "- Start with a bolded summary (e.g., **Summary:**) that directly answers the question.\n"
+            "- After the summary, provide a detailed explanation using bullet points or numbered steps.\n"
+            "- Use headings if appropriate for organization.\n"
+            "- Be concise but thorough.\n"
+            "\nStudy Notes:\n{notes}\n\nQuestion:\n{question}\n\nAnswer:"
+        )
+
+    def clean_llm_answer(self, answer: str) -> str:
+        """
+        Post-process the LLM answer to remove repeated summaries, horizontal rules, and extra blank lines.
+        """
+        # Remove repeated 'In brief' summary at the end
+        answer = re.sub(r'---\s*\*\*In brief:\*\*.*', '', answer, flags=re.DOTALL)
+        # Remove horizontal rules
+        answer = answer.replace('---', '')
+        # Remove extra blank lines
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        return answer.strip()
+
+    def answer_question(self, notes: str, question: str) -> Optional[str]:
+        """
+        Answer a user question based on the full study notes using the LLM.
+
+        Args:
+            notes: The full study notes as a string
+            question: The user's question
+
+        Returns:
+            The LLM's answer as a string, or None if the API call fails
+        """
+        prompt = self.get_qa_prompt_template().format(notes=notes, question=question)
+        estimated_tokens = self.estimate_tokens(notes) + self.estimate_tokens(question) + self.estimate_tokens(prompt)
+        if estimated_tokens > self.MAX_INPUT_TOKENS:
+            print(f"⚠️ Input too large for LLM context window. Consider splitting notes.")
+            return None
+        data = {
+            "model": self.MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1000,
+            "temperature": 0.2,
+            "top_p": 0.9,
+        }
+        try:
+            response = requests.post(self.api_url, headers=self.headers, json=data)
+            response.raise_for_status()
+            response_data = response.json()
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                content = response_data["choices"][0]["message"]["content"]
+                if content and content.strip():
+                    return self.clean_llm_answer(content.strip())
+                else:
+                    print(f"❌ Empty response from API")
+                    return None
+            else:
+                print(f"❌ Invalid response format: {response_data}")
+                return None
         except requests.exceptions.RequestException as e:
             print(f"❌ Network error calling OpenRouter API: {e}")
             if hasattr(e, "response") and e.response is not None:
