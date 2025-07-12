@@ -491,6 +491,10 @@ def ask_question():
     question = data.get("question")
     if not content_hash or not question:
         return jsonify({"error": "content_hash and question are required"}), 400
+
+    print(f"🤔 Processing Q&A request for content_hash: {content_hash}")
+    print(f"❓ Question: {question}")
+
     # Fetch the study note
     response = (
         supabase.table("study_notes")
@@ -499,24 +503,70 @@ def ask_question():
         .execute()
     )
     if not response.data or len(response.data) == 0:
+        print(f"❌ No study notes found for content_hash: {content_hash}")
         return jsonify({"error": "Study note not found"}), 404
+
     note = response.data[0]
     notes_content = note["content"]
-    note_id = note["id"]
+    study_note_id = note["id"]
+    print(f"✅ Found study note with ID: {study_note_id}")
+
+    # Try to get the material ID, but don't fail if it doesn't exist
+    material_id = None
+    try:
+        material_response = (
+            supabase.table("study_materials")
+            .select("id, user_id, name")
+            .eq("content_hash", content_hash)
+            .execute()
+        )
+
+        print(f"📊 Material search results: {material_response.data}")
+
+        if material_response.data:
+            material_id = material_response.data[0]["id"]
+            print(f"✅ Found associated material with ID: {material_id}")
+        else:
+            print(
+                f"⚠️ No material found for content_hash, will use study_note_id instead"
+            )
+    except Exception as e:
+        print(f"⚠️ Error looking up material: {e}")
+
     # Call LLM to answer the question
+    print(f"🧠 Generating answer using LLM...")
     answer = llm_client.answer_question(notes_content, question)
     if answer is None:
+        print(f"❌ LLM failed to generate answer")
         return jsonify({"error": "Failed to generate answer from LLM"}), 500
-    # Save to qa_sessions table
+
+    print(f"✅ Generated answer: {answer[:100]}...")  # Save to qa_sessions table
+    # Use material_id if available, otherwise use study_note_id
+    print(
+        f"💾 Saving Q&A with material_id: {material_id}, study_note_id: {study_note_id}"
+    )
+
     try:
-        qa_insert = supabase.table("qa_sessions").insert({
-            "note_id": note_id,
-            "question": question,
-            "answer": answer,
-        }).execute()
+        qa_insert = (
+            supabase.table("qa_sessions")
+            .insert(
+                {
+                    "material_id": material_id,  # This will be None if no material found
+                    "study_note_id": study_note_id if not material_id else None,
+                    "question": question,
+                    "answer": answer,
+                }
+            )
+            .execute()
+        )
+        print(f"✅ Successfully saved Q&A session: {qa_insert.data}")
+        if not qa_insert.data:
+            print(f"⚠️ Q&A insert returned no data but no error")
     except Exception as e:
-        print(f"⚠️ Failed to save Q&A session: {e}")
-        # Continue anyway
+        print(f"❌ Failed to save Q&A session: {e}")
+        # Return error instead of continuing
+        return jsonify({"error": f"Failed to save Q&A: {str(e)}"}), 500
+
     return jsonify({"status": "success", "answer": answer})
 
 
@@ -525,25 +575,88 @@ def qa_list():
     content_hash = request.args.get("content_hash")
     if not content_hash:
         return jsonify({"error": "content_hash is required"}), 400
-    # Get the note id for this content_hash
+
+    print(f"🔍 QA List: Looking for Q&A with content_hash: {content_hash}")
+
+    qa_sessions = []
+
+    # First, try to find by material_id
+    material_response = (
+        supabase.table("study_materials")
+        .select("id, name, user_id")
+        .eq("content_hash", content_hash)
+        .execute()
+    )
+
+    if material_response.data:
+        material_id = material_response.data[0]["id"]
+        print(f"✅ QA List: Found material_id: {material_id}, searching Q&A...")
+
+        # Get Q&A sessions linked to this material
+        qa_response = (
+            supabase.table("qa_sessions")
+            .select("id, question, answer, created_at")
+            .eq("material_id", material_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        qa_sessions.extend(qa_response.data or [])
+
+    # Also try to find by study_note_id
     note_response = (
         supabase.table("study_notes")
         .select("id")
         .eq("content_hash", content_hash)
         .execute()
     )
-    if not note_response.data or len(note_response.data) == 0:
-        return jsonify({"qa": []})
-    note_id = note_response.data[0]["id"]
-    # Get all Q&A for this note
-    qa_response = (
-        supabase.table("qa_sessions")
-        .select("id, question, answer, created_at")
-        .eq("note_id", note_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return jsonify({"qa": qa_response.data or []})
+
+    if note_response.data:
+        note_id = note_response.data[0]["id"]
+        print(f"✅ QA List: Found note_id: {note_id}, searching Q&A...")
+
+        # Get Q&A sessions linked to this note (avoid duplicates)
+        existing_ids = {qa["id"] for qa in qa_sessions}
+        qa_response = (
+            supabase.table("qa_sessions")
+            .select("id, question, answer, created_at")
+            .eq("study_note_id", note_id)  # Now using the correct study_note_id column
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        for qa in qa_response.data or []:
+            if qa["id"] not in existing_ids:
+                qa_sessions.append(qa)
+
+    print(f"📋 QA List: Found {len(qa_sessions)} Q&A sessions total")
+
+    # Sort by created_at descending
+    qa_sessions.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return jsonify({"qa": qa_sessions})
+
+
+@app.route("/api/qa/<qa_id>", methods=["DELETE"])
+def delete_qa(qa_id):
+    """Delete a specific Q&A session"""
+    try:
+        user_id = request.headers.get("X-User-ID")
+        if not user_id:
+            return jsonify({"error": "User ID not provided"}), 401
+
+        print(f"🗑️ Delete QA: Attempting to delete Q&A session {qa_id}")
+
+        # Simply delete the Q&A session - if the user can see it in their list, they should be able to delete it
+        delete_response = (
+            supabase.table("qa_sessions").delete().eq("id", qa_id).execute()
+        )
+
+        print(f"✅ Delete QA: Successfully deleted Q&A session {qa_id}")
+        return jsonify({"status": "success", "message": "Q&A session deleted"})
+
+    except Exception as e:
+        print(f"❌ Error in delete_qa endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/debug-material/<material_id>", methods=["GET"])
