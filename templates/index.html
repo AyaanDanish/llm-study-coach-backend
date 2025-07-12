@@ -23,13 +23,21 @@
             padding: 2rem;
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            max-width: 600px;
+            max-width: 800px;
             width: 100%;
         }
 
         h1 {
             color: #2d3748;
             margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        h3 {
+            color: #4a5568;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
         }
 
         .status {
@@ -38,29 +46,42 @@
             padding: 1rem;
             border-radius: 5px;
             margin-bottom: 1rem;
+            text-align: center;
         }
 
         .endpoints {
             background: #f7fafc;
-            padding: 1rem;
+            padding: 1.5rem;
             border-radius: 5px;
             border: 1px solid #e2e8f0;
         }
 
         .endpoint {
-            margin-bottom: 0.5rem;
-            padding: 0.5rem;
+            margin-bottom: 0.75rem;
+            padding: 0.75rem;
             background: #edf2f7;
-            border-radius: 3px;
+            border-radius: 5px;
+            border-left: 3px solid #4299e1;
         }
 
         .method {
             font-weight: bold;
             color: #4a5568;
+            display: inline-block;
+            min-width: 70px;
         }
 
         .path {
             color: #2b6cb0;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+
+        small {
+            color: #718096;
+            display: block;
+            margin-top: 0.25rem;
+            font-style: italic;
         }
     </style>
 </head>
@@ -73,17 +94,72 @@
         </div>
         <div class="endpoints">
             <h2>Available Endpoints:</h2>
+
+            <h3>📄 PDF Processing</h3>
             <div class="endpoint">
                 <span class="method">POST</span>
                 <span class="path">/api/process-pdf</span>
-            </div>
-            <div class="endpoint">
-                <span class="method">GET</span>
-                <span class="path">/api/notes/{content_hash}</span>
+                <small>- Process PDF files and generate study notes</small>
             </div>
             <div class="endpoint">
                 <span class="method">POST</span>
                 <span class="path">/api/generate-hash</span>
+                <small>- Generate content hash for PDF files</small>
+            </div>
+
+            <h3>📚 Study Notes</h3>
+            <div class="endpoint">
+                <span class="method">GET</span>
+                <span class="path">/api/notes/{content_hash}</span>
+                <small>- Retrieve study notes by content hash</small>
+            </div>
+
+            <h3>🃏 Flashcards</h3>
+            <div class="endpoint">
+                <span class="method">POST</span>
+                <span class="path">/api/generate-flashcards</span>
+                <small>- Generate flashcards from custom content</small>
+            </div>
+            <div class="endpoint">
+                <span class="method">POST</span>
+                <span class="path">/api/generate-flashcards-from-material/{content_hash}</span>
+                <small>- Generate flashcards from existing study material</small>
+            </div>
+
+            <h3>🧠 Quiz Generation</h3>
+            <div class="endpoint">
+                <span class="method">POST</span>
+                <span class="path">/generate-quiz</span>
+                <small>- Generate quiz questions from study material</small>
+            </div>
+
+            <h3>❓ Q&A System</h3>
+            <div class="endpoint">
+                <span class="method">POST</span>
+                <span class="path">/api/ask-question</span>
+                <small>- Ask questions about study content</small>
+            </div>
+            <div class="endpoint">
+                <span class="method">GET</span>
+                <span class="path">/api/qa-list</span>
+                <small>- Get Q&A history for content</small>
+            </div>
+            <div class="endpoint">
+                <span class="method">DELETE</span>
+                <span class="path">/api/qa/{qa_id}</span>
+                <small>- Delete specific Q&A session</small>
+            </div>
+
+            <h3>🔧 Debug Endpoints</h3>
+            <div class="endpoint">
+                <span class="method">GET</span>
+                <span class="path">/debug-material/{material_id}</span>
+                <small>- Debug material existence and data</small>
+            </div>
+            <div class="endpoint">
+                <span class="method">GET</span>
+                <span class="path">/debug-content/{content_hash}</span>
+                <small>- Debug content by hash and related materials</small>
             </div>
         </div>
     </div>
