@@ -195,8 +195,22 @@ def generate_flashcards_from_material(content_hash):
             )
             if material_response.data:
                 material_info = material_response.data
-                # Use the subject from study_materials as the category
-                category = material_info["subject"] or category
+                # Create a descriptive category based on subject and title
+                subject = material_info["subject"] or "Study Material"
+                title = material_info["title"] or ""
+
+                # Create a broad category like "Subject - Topic"
+                if title and subject != title:
+                    # Try to extract the main topic from the title
+                    title_clean = (
+                        title.replace(".pdf", "")
+                        .replace("_", " ")
+                        .replace("-", " ")
+                        .strip()
+                    )
+                    category = f"{subject} - {title_clean}"
+                else:
+                    category = subject
         except Exception as e:
             print(f"⚠️ Could not fetch material info: {e}")
             # Continue with default category

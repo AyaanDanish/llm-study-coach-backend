@@ -23,6 +23,14 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE) -> List[str]:
 
     Tries to split at natural boundaries (paragraphs, sentences) to preserve context.
     """
+    # Validate chunk size
+    if chunk_size <= 0:
+        raise ValueError("Chunk size must be greater than 0")
+
+    # Handle empty or whitespace-only strings
+    if not text.strip():
+        return []
+
     if len(text) <= chunk_size:
         return [text]
 

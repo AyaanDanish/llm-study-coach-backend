@@ -37,8 +37,16 @@ You are an expert study assistant with access to a comprehensive document. Gener
 Create comprehensive study notes following this structure:
 
 ## Document Overview
-- Brief summary of the main topics covered
-- Key learning objectives
+
+**Main Topics Covered:**
+- Topic 1
+- Topic 2
+- Topic 3
+
+**Key Learning Objectives:**
+- Objective 1
+- Objective 2
+- Objective 3
 
 ## Detailed Notes
 
@@ -69,6 +77,8 @@ For each major section/topic:
 ---
 
 ## Key Takeaways
+
+**Critical Concepts:**
 - Most important concepts to remember
 - Detailed explanation of critical formulas/procedures
 - Any additional insights or tips for understanding the material
@@ -82,6 +92,7 @@ For each major section/topic:
 6. **Preserve exact formulas/equations** when present
 7. **Include all examples** mentioned in the source
 8. **Markdown formatting is required for clarity**
+9. **IMPORTANT**: Do NOT use bullet points directly under main headings. Always use bold subheadings followed by bullet points.
 
 Document content:
 \"\"\"{chunk}\"\"\""""
@@ -199,7 +210,9 @@ Document content:
                     f"✅ Successfully generated notes for chunk {i + 1}"
                 )  # Calculate actual cost (rough estimate)
                 chunk_tokens = self.estimate_tokens(chunk)
-                output_tokens = self.estimate_tokens(result if result is not None else "")
+                output_tokens = self.estimate_tokens(
+                    result if result is not None else ""
+                )
                 chunk_cost = (chunk_tokens / 1_000_000) * self.INPUT_COST_PER_1M + (
                     output_tokens / 1_000_000
                 ) * self.OUTPUT_COST_PER_1M
@@ -386,17 +399,25 @@ Document content:
 - **medium**: Concepts requiring understanding, applications
 - **hard**: Complex processes, analysis, synthesis
 
+## Category Guidelines:
+- Create a broad, descriptive category that covers all the flashcards from this material
+- Use format: "Subject - Specific Topic" (e.g., "Databases - Embedded SQL", "Physics - Quantum Mechanics")
+- ALL flashcards should use the SAME category for consistency
+- Base the category on the main subject and specific topic covered in the material
+
 ## Instructions:
 - Generate 8-15 flashcards covering the most important concepts
 - Ensure variety in question types (what, how, why, when, examples)
-- Use the same category for related flashcards
+- Use the SAME descriptive category for ALL flashcards from this material
 - Focus on information that students need to memorize or understand deeply
 - Avoid yes/no questions - prefer open-ended questions that require explanation
 
 Content to create flashcards from:
 \"\"\"{content}\"\"\""""
 
-    def generate_flashcards(self, content: Optional[str], category: Optional[str] = None) -> Optional[list]:
+    def generate_flashcards(
+        self, content: Optional[str], category: Optional[str] = None
+    ) -> Optional[list]:
         """
         Generate flashcards from study content using GPT-4.1 Nano.
 
@@ -545,10 +566,9 @@ Content to create flashcards from:
                                 and card["front"].strip()
                                 and card["back"].strip()
                             ):
+                                # if "category" not in card:
+                                #     card["category"] = category or "General"
 
-                                # Set default values if missing (shouldn't happen with structured output)
-                                if "category" not in card:
-                                    card["category"] = category or "General"
                                 if "difficulty" not in card:
                                     card["difficulty"] = "medium"
 
@@ -832,11 +852,11 @@ Study Material Content:
         Post-process the LLM answer to remove repeated summaries, horizontal rules, and extra blank lines.
         """
         # Remove repeated 'In brief' summary at the end
-        answer = re.sub(r'---\s*\*\*In brief:\*\*.*', '', answer, flags=re.DOTALL)
+        answer = re.sub(r"---\s*\*\*In brief:\*\*.*", "", answer, flags=re.DOTALL)
         # Remove horizontal rules
-        answer = answer.replace('---', '')
+        answer = answer.replace("---", "")
         # Remove extra blank lines
-        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        answer = re.sub(r"\n{3,}", "\n\n", answer)
         return answer.strip()
 
     def answer_question(self, notes: str, question: str) -> Optional[str]:
@@ -851,9 +871,15 @@ Study Material Content:
             The LLM's answer as a string, or None if the API call fails
         """
         prompt = self.get_qa_prompt_template().format(notes=notes, question=question)
-        estimated_tokens = self.estimate_tokens(notes) + self.estimate_tokens(question) + self.estimate_tokens(prompt)
+        estimated_tokens = (
+            self.estimate_tokens(notes)
+            + self.estimate_tokens(question)
+            + self.estimate_tokens(prompt)
+        )
         if estimated_tokens > self.MAX_INPUT_TOKENS:
-            print(f"⚠️ Input too large for LLM context window. Consider splitting notes.")
+            print(
+                f"⚠️ Input too large for LLM context window. Consider splitting notes."
+            )
             return None
         data = {
             "model": self.MODEL,
