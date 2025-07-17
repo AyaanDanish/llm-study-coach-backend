@@ -7,6 +7,9 @@ from utils.llm_client import LLMClient
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import hashlib
+import requests
+import uuid
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +35,15 @@ supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_
 
 # Initialize LLM client
 llm_client = LLMClient()
+
+# Check if Blob token is available (required for production)
+BLOB_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN")
+if not BLOB_TOKEN:
+    print(
+        "Warning: BLOB_READ_WRITE_TOKEN not found. Blob upload functionality will not work."
+    )
+else:
+    print("✅ Blob storage configured successfully")
 
 
 # Error handler for file too large
@@ -63,6 +75,97 @@ def handle_preflight():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/upload-to-blob", methods=["POST"])
+def upload_to_blob():
+    """Upload file to Vercel Blob storage and return the blob URL"""
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename.endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+
+    # Get user ID from headers
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        return jsonify({"error": "User ID not provided"}), 401
+
+    # Check if blob token is available
+    if not BLOB_TOKEN:
+        return (
+            jsonify(
+                {
+                    "error": "Blob storage not configured. Please set BLOB_READ_WRITE_TOKEN."
+                }
+            ),
+            500,
+        )
+
+    try:
+        # Read file content
+        file_content = file.read()
+
+        # Generate a unique filename
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        unique_filename = f"{user_id}_{timestamp}_{file.filename}"
+
+        # Upload to Vercel Blob using REST API
+        blob_url = upload_to_vercel_blob(
+            pathname=unique_filename,
+            file_content=file_content,
+            content_type="application/pdf",
+            token=BLOB_TOKEN
+        )
+
+        return jsonify(
+            {
+                "status": "success",
+                "blob_url": blob_url,
+                "filename": file.filename,
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to upload file: {str(e)}"}), 500
+
+
+def upload_to_vercel_blob(pathname, file_content, content_type, token):
+    """
+    Upload file to Vercel Blob using direct REST API calls
+    """
+    # Vercel Blob API endpoint
+    url = "https://blob.vercel-storage.com"
+    
+    # Headers for the request
+    headers = {
+        "authorization": f"Bearer {token}",
+        "x-content-type": content_type,
+        "x-add-random-suffix": "1",  # Equivalent to add_random_suffix=True
+        "x-access": "public"
+    }
+    
+    # Upload the file
+    response = requests.put(
+        f"{url}/{pathname}",
+        data=file_content,
+        headers=headers
+    )
+    
+    if response.status_code not in [200, 201]:
+        raise Exception(f"Blob upload failed: {response.status_code} - {response.text}")
+    
+    # Parse response to get the blob URL
+    response_data = response.json()
+    
+    # Vercel Blob returns the URL in the response
+    if "url" in response_data:
+        return response_data["url"]
+    else:
+        # Fallback: construct URL from response or use pathname
+        blob_url = response_data.get("downloadUrl") or f"{url}/{pathname}"
+        return blob_url
 
 
 @app.route("/api/process-pdf", methods=["POST"])
@@ -167,6 +270,126 @@ def get_notes(content_hash):
             }
         )
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/process-pdf-from-blob", methods=["POST"])
+def process_pdf_from_blob():
+    """Process PDF from Vercel Blob URL"""
+    data = request.get_json()
+
+    if not data or "blob_url" not in data:
+        return jsonify({"error": "Blob URL not provided"}), 400
+
+    blob_url = data["blob_url"]
+    subject = data.get("subject")
+    content_hash = data.get("content_hash")
+
+    if not subject:
+        return jsonify({"error": "Subject not provided"}), 400
+    if not content_hash:
+        return jsonify({"error": "Content hash not provided"}), 400
+
+    # Get user_id from request headers
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        return jsonify({"error": "User ID not provided"}), 401
+
+    try:
+        # Download PDF from blob URL
+        response = requests.get(blob_url)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to download file from blob URL"}), 400
+
+        file_bytes = response.content
+
+        # Check if notes exist in database
+        existing_notes = (
+            supabase.table("study_notes")
+            .select("*")
+            .eq("content_hash", content_hash)
+            .execute()
+        )
+
+        if existing_notes.data:
+            # Return existing notes
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": "Retrieved existing notes",
+                    "content": existing_notes.data[0]["content"],
+                    "content_hash": content_hash,
+                    "model_used": existing_notes.data[0]["model_used"],
+                    "generated_at": existing_notes.data[0]["generated_at"],
+                }
+            )
+
+        # Process PDF
+        text, chunks, _ = process_pdf(file_bytes)
+
+        # Generate new notes
+        notes = llm_client.generate_notes_for_chunks(chunks)
+        combined_notes = "\n\n".join([f"\n\n{note}" for i, note in enumerate(notes)])
+
+        # Save to database
+        result = (
+            supabase.table("study_notes")
+            .insert(
+                {
+                    "user_id": user_id,
+                    "subject": subject,
+                    "content": combined_notes,
+                    "content_hash": content_hash,
+                    "model_used": llm_client.model_name,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .execute()
+        )
+
+        return jsonify(
+            {
+                "status": "success",
+                "message": "PDF processed and notes generated successfully",
+                "content": combined_notes,
+                "content_hash": content_hash,
+                "model_used": llm_client.model_name,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/generate-hash-from-blob", methods=["POST"])
+def generate_hash_from_blob():
+    """Generate content hash for PDF from Vercel Blob URL"""
+    data = request.get_json()
+
+    if not data or "blob_url" not in data:
+        return jsonify({"error": "Blob URL not provided"}), 400
+
+    blob_url = data["blob_url"]
+
+    # Get user ID from headers
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        return jsonify({"error": "User ID not provided"}), 401
+
+    try:
+        # Download PDF from blob URL
+        response = requests.get(blob_url)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to download file from blob URL"}), 400
+
+        file_bytes = response.content
+
+        # Generate hash using existing process_pdf function
+        _, _, content_hash = process_pdf(file_bytes)
+
+        return jsonify({"content_hash": content_hash})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -766,6 +989,24 @@ def debug_content(content_hash):
     except Exception as e:
         print(f"Debug error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """Health check endpoint to verify blob storage configuration"""
+    return jsonify(
+        {
+            "status": "healthy",
+            "blob_configured": bool(BLOB_TOKEN),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "features": {
+                "direct_upload": True,
+                "blob_upload": bool(BLOB_TOKEN),
+                "max_direct_upload_size": "4.5MB (Vercel limit)",
+                "max_blob_upload_size": "500MB (Vercel Blob limit)",
+            },
+        }
+    )
 
 
 # For local development
