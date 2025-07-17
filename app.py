@@ -14,11 +14,25 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# Configure maximum file upload size (50MB)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB in bytes
+
 # Initialize Supabase client
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 # Initialize LLM client
 llm_client = LLMClient()
+
+
+# Error handler for file too large
+@app.errorhandler(413)
+def too_large(e):
+    return (
+        jsonify(
+            {"error": "File too large. Maximum file size is 50MB.", "max_size": "50MB"}
+        ),
+        413,
+    )
 
 
 @app.route("/")
