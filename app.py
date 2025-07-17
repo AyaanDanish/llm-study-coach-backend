@@ -17,12 +17,18 @@ load_dotenv()
 app = Flask(__name__)
 
 # Configure CORS with specific settings for file uploads
-# For development - you may want to restrict origins in production
 CORS(
     app,
     origins=["*"],  # Allow all origins for now - restrict in production
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-User-ID"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-User-ID",
+        "x-content-type",
+        "x-add-random-suffix",
+        "x-access",
+    ],
     supports_credentials=False,  # Set to False when using origins=["*"]
     max_age=86400,
 )
@@ -77,6 +83,66 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/get-blob-upload-url", methods=["POST"])
+def get_blob_upload_url():
+    """Get a signed URL for direct blob upload from frontend"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    filename = data.get("filename")
+    content_type = data.get("content_type", "application/pdf")
+
+    if not filename:
+        return jsonify({"error": "Filename not provided"}), 400
+
+    if not filename.endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+
+    # Get user ID from headers
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        return jsonify({"error": "User ID not provided"}), 401
+
+    # Check if blob token is available
+    if not BLOB_TOKEN:
+        return (
+            jsonify(
+                {
+                    "error": "Blob storage not configured. Please set BLOB_READ_WRITE_TOKEN."
+                }
+            ),
+            500,
+        )
+
+    try:
+        # Generate a unique filename
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        unique_filename = f"{user_id}_{timestamp}_{filename}"
+
+        # Return the upload URL and headers for direct frontend upload
+        upload_url = f"https://blob.vercel-storage.com/{unique_filename}"
+
+        return jsonify(
+            {
+                "status": "success",
+                "upload_url": upload_url,
+                "headers": {
+                    "authorization": f"Bearer {BLOB_TOKEN}",
+                    "x-content-type": content_type,
+                    "x-add-random-suffix": "1",
+                    "x-access": "public",
+                },
+                "method": "PUT",
+                "expected_blob_url": upload_url,  # The URL where the file will be accessible
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate upload URL: {str(e)}"}), 500
+
+
 @app.route("/api/upload-to-blob", methods=["POST"])
 def upload_to_blob():
     """Upload file to Vercel Blob storage and return the blob URL"""
@@ -116,7 +182,7 @@ def upload_to_blob():
             pathname=unique_filename,
             file_content=file_content,
             content_type="application/pdf",
-            token=BLOB_TOKEN
+            token=BLOB_TOKEN,
         )
 
         return jsonify(
@@ -137,28 +203,24 @@ def upload_to_vercel_blob(pathname, file_content, content_type, token):
     """
     # Vercel Blob API endpoint
     url = "https://blob.vercel-storage.com"
-    
+
     # Headers for the request
     headers = {
         "authorization": f"Bearer {token}",
         "x-content-type": content_type,
         "x-add-random-suffix": "1",  # Equivalent to add_random_suffix=True
-        "x-access": "public"
+        "x-access": "public",
     }
-    
+
     # Upload the file
-    response = requests.put(
-        f"{url}/{pathname}",
-        data=file_content,
-        headers=headers
-    )
-    
+    response = requests.put(f"{url}/{pathname}", data=file_content, headers=headers)
+
     if response.status_code not in [200, 201]:
         raise Exception(f"Blob upload failed: {response.status_code} - {response.text}")
-    
+
     # Parse response to get the blob URL
     response_data = response.json()
-    
+
     # Vercel Blob returns the URL in the response
     if "url" in response_data:
         return response_data["url"]
