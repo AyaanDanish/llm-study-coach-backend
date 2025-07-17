@@ -12,7 +12,17 @@ import hashlib
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+
+# Configure CORS with specific settings for file uploads
+# For development - you may want to restrict origins in production
+CORS(
+    app,
+    origins=["*"],  # Allow all origins for now - restrict in production
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-User-ID"],
+    supports_credentials=False,  # Set to False when using origins=["*"]
+    max_age=86400,
+)
 
 # Configure maximum file upload size (50MB)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB in bytes
@@ -33,6 +43,21 @@ def too_large(e):
         ),
         413,
     )
+
+
+# Handle CORS preflight requests
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add(
+            "Access-Control-Allow-Headers", "Content-Type,Authorization,X-User-ID"
+        )
+        response.headers.add(
+            "Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS"
+        )
+        return response
 
 
 @app.route("/")
